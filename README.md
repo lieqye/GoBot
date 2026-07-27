@@ -40,7 +40,7 @@ call never blocks a `.ban` from firing instantly.
 ### 2. Clone & install
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/lieqye/GoBot
 cd myuserbot
 go mod tidy
 ```
