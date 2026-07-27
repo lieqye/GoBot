@@ -254,9 +254,10 @@ func inputPeerFromPeer(e tg.Entities, peer tg.PeerClass) tg.InputPeerClass {
 }
 
 func (b *Bot) reply(ctx context.Context, e tg.Entities, msg *tg.Message, text string) error {
+	styled := StyleFont(text)
 	_, err := b.api.MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
 		Peer:     inputPeerFromPeer(e, msg.GetPeerID()),
-		Message:  text,
+		Message:  styled,
 		ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: msg.ID},
 		RandomID: randomID(),
 	})
@@ -277,7 +278,7 @@ func (b *Bot) cmdHelp(ctx context.Context, e tg.Entities, msg *tg.Message, isSud
 			sb.WriteString("\n👑 " + StyleFont("sudo only") + "\n")
 			lastSudo = true
 		}
-		fmt.Fprintf(&sb, "%s — %s\n", c.Cmd, c.Desc)
+		fmt.Fprintf(&sb, "• %-18s %s\n", c.Cmd, c.Desc)
 	}
 	return b.reply(ctx, e, msg, sb.String())
 }
@@ -682,49 +683,84 @@ func (b *Bot) cmdSudoList(ctx context.Context, e tg.Entities, msg *tg.Message) e
 
 // ---- ai command -------------------------------------------------------
 
-// cmdAI handles ".ai <question>". Everyone approved+ gets a witty text
-// reply. Actually *executing* an action (ban/mute/kick) via natural
-// language is sudo-only — an approved (non-sudo) user asking ".ai ban this
-// guy" only gets a reply, nothing happens.
+// cmdAI handles ".ai <question>". It acts like a lightweight autonomous agent:
+// it can answer the user and, when the request is clearly an action, it can
+// execute the matching moderation action as well.
 func (b *Bot) cmdAI(ctx context.Context, e tg.Entities, msg *tg.Message, query string, isSudo bool) error {
 	if strings.TrimSpace(query) == "" {
 		return b.reply(ctx, e, msg, "⚠️ "+StyleFont("ask me something"))
+	}
+
+	action, hasAction := parseAgentAction(query)
+	if isSudo && hasAction {
+		switch action.name {
+		case "ban":
+			return b.cmdBan(ctx, e, msg, true)
+		case "unban":
+			return b.cmdBan(ctx, e, msg, false)
+		case "mute":
+			args := []string{}
+			if action.value > 0 {
+				args = []string{fmt.Sprintf("%d", action.value)}
+			}
+			return b.cmdMute(ctx, e, msg, args, true)
+		case "unmute":
+			return b.cmdMute(ctx, e, msg, nil, false)
+		case "kick":
+			return b.cmdKick(ctx, e, msg)
+		case "purge":
+			args := []string{}
+			if action.value > 0 {
+				args = []string{fmt.Sprintf("%d", action.value)}
+			}
+			return b.cmdPurge(ctx, e, msg, args)
+		}
 	}
 
 	reply, err := AskAI(ctx, query)
 	if err != nil {
 		return b.reply(ctx, e, msg, "❌ "+StyleFont("ai's down")+": "+err.Error())
 	}
-	if err := b.reply(ctx, e, msg, reply); err != nil {
-		return err
-	}
-
-	if isSudo && looksLikeActionRequest(query) {
-		lower := strings.ToLower(query)
-		switch {
-		case strings.Contains(lower, "unban"):
-			return b.cmdBan(ctx, e, msg, false)
-		case strings.Contains(lower, "ban"):
-			return b.cmdBan(ctx, e, msg, true)
-		case strings.Contains(lower, "unmute"):
-			return b.cmdMute(ctx, e, msg, nil, false)
-		case strings.Contains(lower, "mute"):
-			return b.cmdMute(ctx, e, msg, nil, true)
-		case strings.Contains(lower, "kick"):
-			return b.cmdKick(ctx, e, msg)
-		}
-	}
-	return nil
+	return b.reply(ctx, e, msg, reply)
 }
 
-func looksLikeActionRequest(query string) bool {
-	lower := strings.ToLower(query)
-	for _, kw := range []string{"ban", "mute", "kick"} {
-		if strings.Contains(lower, kw) {
-			return true
+type agentAction struct {
+	name  string
+	value int
+}
+
+func parseAgentAction(query string) (agentAction, bool) {
+	lower := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case strings.Contains(lower, "unban"):
+		return agentAction{name: "unban"}, true
+	case strings.Contains(lower, "ban"):
+		return agentAction{name: "ban"}, true
+	case strings.Contains(lower, "unmute"):
+		return agentAction{name: "unmute"}, true
+	case strings.Contains(lower, "mute"):
+		value := 0
+		for _, part := range strings.Fields(lower) {
+			if v, err := strconv.Atoi(part); err == nil && v > 0 {
+				value = v
+				break
+			}
 		}
+		return agentAction{name: "mute", value: value}, true
+	case strings.Contains(lower, "kick"):
+		return agentAction{name: "kick"}, true
+	case strings.Contains(lower, "purge"):
+		value := 10
+		for _, part := range strings.Fields(lower) {
+			if v, err := strconv.Atoi(part); err == nil && v > 0 {
+				value = v
+				break
+			}
+		}
+		return agentAction{name: "purge", value: value}, true
+	default:
+		return agentAction{}, false
 	}
-	return false
 }
 
 // ---- small utilities -------------------------------------------------------
@@ -762,9 +798,9 @@ func displayName(u *tg.User) string {
 		name = "user"
 	}
 	if u.Username != "" {
-		return fmt.Sprintf("%s (@%s)", name, u.Username)
+		return StyleFont(fmt.Sprintf("%s (@%s)", name, u.Username))
 	}
-	return name
+	return StyleFont(name)
 }
 
 func parseMinutes(s string) (time.Duration, error) {

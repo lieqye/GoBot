@@ -78,20 +78,31 @@ func main() {
 
 		bot := NewBot(client.API(), cfg, self)
 
-		dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewMessage) error {
-			msg, ok := u.Message.(*tg.Message)
-			if !ok {
+		handleNewMessage := func(ctx context.Context, e tg.Entities, msg *tg.Message) error {
+			if msg == nil {
 				return nil
 			}
-			// Handle each message in its own goroutine — the ai
-			// call and any network-bound command shouldn't stall
-			// the rest of the bot's replies.
 			go func() {
 				if err := bot.HandleMessage(ctx, e, msg); err != nil {
 					fmt.Println("handler error:", err)
 				}
 			}()
 			return nil
+		}
+
+		dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewMessage) error {
+			msg, ok := u.Message.(*tg.Message)
+			if !ok {
+				return nil
+			}
+			return handleNewMessage(ctx, e, msg)
+		})
+		dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
+			msg, ok := u.Message.(*tg.Message)
+			if !ok {
+				return nil
+			}
+			return handleNewMessage(ctx, e, msg)
 		})
 
 		fmt.Printf("✅ logged in as %s (id=%d) — userbot is live\n", displayName(self), self.ID)

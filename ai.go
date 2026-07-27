@@ -12,42 +12,43 @@ import (
 	"time"
 )
 
-// smallCaps maps lowercase ascii letters to their small-caps unicode
-// equivalent, matching the "I Kᴇᴇᴘ Tʀᴀᴄᴋ Oғ Oᴜʀ Cᴏɴᴠᴇʀsᴀᴛɪᴏɴ" style:
-// first letter of each word stays a normal capital, the rest of the word
-// is lower-cased and run through this table (letters with no small-caps
-// glyph, like q/s/x, are left as-is).
+// smallCaps maps ASCII letters to the requested compact small-caps look.
+// The first letter of each word stays normal, while the rest are converted.
 var smallCaps = map[rune]rune{
-	'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ',
+	'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ꜰ',
 	'g': 'ɢ', 'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ',
-	'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ', 'q': 'q', 'r': 'ʀ',
-	's': 's', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
+	'm': 'ᴍ', 'n': 'ɴ', 'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ꞯ', 'r': 'ʀ',
+	's': 'ꜱ', 't': 'ᴛ', 'u': 'ᴜ', 'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x',
 	'y': 'ʏ', 'z': 'ᴢ',
 }
 
 // StyleFont converts plain text into the bot's signature small-caps look.
-// Non-letters (numbers, punctuation, emoji, @mentions) pass through untouched.
+// It preserves punctuation and emoji while keeping the output visually tight.
 func StyleFont(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
 	words := strings.Fields(s)
 	for i, w := range words {
-		var b strings.Builder
 		runes := []rune(w)
+		if i > 0 {
+			b.WriteByte(' ')
+		}
 		for j, r := range runes {
-			lower := toLowerRune(r)
 			if j == 0 && isLetter(r) {
-				// first letter of the word: keep as a normal capital
 				b.WriteRune(toUpperRune(r))
 				continue
 			}
-			if mapped, ok := smallCaps[lower]; ok {
+			if mapped, ok := smallCaps[toLowerRune(r)]; ok {
 				b.WriteRune(mapped)
 			} else {
 				b.WriteRune(r)
 			}
 		}
-		words[i] = b.String()
 	}
-	return strings.Join(words, " ")
+	return b.String()
 }
 
 func isLetter(r rune) bool {
@@ -78,6 +79,16 @@ type aiAPIResponse struct {
 	Response string `json:"response"`
 }
 
+var aiHTTPClient = &http.Client{
+	Timeout: 3 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        200,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     30 * time.Second,
+		DisableCompression:  true,
+	},
+}
+
 // AskAI calls the AI backend and returns a styled, emoji-flavored reply
 // ready to send to Telegram.
 func AskAI(ctx context.Context, query string) (string, error) {
@@ -88,8 +99,7 @@ func AskAI(ctx context.Context, query string) (string, error) {
 		return "", err
 	}
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := aiHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("ai api unreachable: %w", err)
 	}
@@ -108,10 +118,8 @@ func AskAI(ctx context.Context, query string) (string, error) {
 		return "", fmt.Errorf("ai api returned empty response")
 	}
 
-	rand.Seed(time.Now().UnixNano())
 	lead := flavorEmojis[rand.Intn(len(flavorEmojis))]
 	tail := flavorEmojis[rand.Intn(len(flavorEmojis))]
-
 	styled := StyleFont(parsed.Response)
 	return fmt.Sprintf("%s %s %s", lead, styled, tail), nil
 }
