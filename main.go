@@ -78,31 +78,40 @@ func main() {
 
 		bot := NewBot(client.API(), cfg, self)
 
-		handleNewMessage := func(ctx context.Context, e tg.Entities, msg *tg.Message) error {
-			if msg == nil {
-				return nil
-			}
+		sched, err := NewScheduler(bot)
+		if err != nil {
+			return fmt.Errorf("failed to load schedules.json: %w", err)
+		}
+		bot.sched = sched
+
+		// Telegram delivers messages from private chats/basic groups via
+		// UpdateNewMessage, but supergroups AND channels use a *separate*
+		// update type, UpdateNewChannelMessage. Registering only the first
+		// one (the easy mistake) means the bot silently never sees a single
+		// message posted in a supergroup or channel. Both are wired here so
+		// it works everywhere: DMs, basic groups, supergroups, channels.
+		dispatch := func(ctx context.Context, e tg.Entities, msg *tg.Message) {
+			// Each message is handled in its own goroutine so a slow
+			// command (like .ai hitting the network) never delays the
+			// bot's response to anything else happening concurrently.
 			go func() {
 				if err := bot.HandleMessage(ctx, e, msg); err != nil {
 					fmt.Println("handler error:", err)
 				}
 			}()
-			return nil
 		}
 
 		dispatcher.OnNewMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewMessage) error {
-			msg, ok := u.Message.(*tg.Message)
-			if !ok {
-				return nil
+			if msg, ok := u.Message.(*tg.Message); ok {
+				dispatch(ctx, e, msg)
 			}
-			return handleNewMessage(ctx, e, msg)
+			return nil
 		})
 		dispatcher.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
-			msg, ok := u.Message.(*tg.Message)
-			if !ok {
-				return nil
+			if msg, ok := u.Message.(*tg.Message); ok {
+				dispatch(ctx, e, msg)
 			}
-			return handleNewMessage(ctx, e, msg)
+			return nil
 		})
 
 		fmt.Printf("✅ logged in as %s (id=%d) — userbot is live\n", displayName(self), self.ID)
